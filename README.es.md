@@ -23,13 +23,13 @@ Documentación del producto: [developers.openwaf.dev/es/egress/ci/quickstart/](h
    ```yaml
    steps:
      - uses: actions/checkout@v4
-     - uses: openwaf-dev/egress-action@v0.3.1
+     - uses: openwaf-dev/egress-action@v0.3.2
      - run: make test
    ```
 
    En producción, fija el SHA completo del commit de la versión en vez de la etiqueta (una etiqueta se puede mover;
    un SHA, no), con la versión como comentario para que Dependabot pueda actualizarlo:
-   `uses: openwaf-dev/egress-action@<SHA de 40 caracteres de v0.3.1> # v0.3.1`.
+   `uses: openwaf-dev/egress-action@<SHA de 40 caracteres de v0.3.2> # v0.3.2`.
 
 2. Sube `.github/egress.yml`:
 

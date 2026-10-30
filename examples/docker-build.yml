@@ -16,7 +16,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: openwaf-dev/egress-action@v0.3.1
+      - uses: openwaf-dev/egress-action@v0.3.2
         with:
           policy: .github/egress-docker.yml
           containers: lock-all

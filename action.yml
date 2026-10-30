@@ -1,5 +1,5 @@
 name: OpenWAF Egress CI
-description: Route a job's outbound traffic through an allowlist proxy with DNS logging, an nftables lock, DLP on what leaves and a per-run report.
+description: Put a CI job's outbound traffic, containers included, behind an allowlist with DNS logging and DLP. Audit, then enforce.
 author: OpenWAF
 inputs:
   policy:

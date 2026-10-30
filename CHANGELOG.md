@@ -1,10 +1,18 @@
 # Changelog
 
 All notable changes to this repository. Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
-versions follow [Semantic Versioning](https://semver.org/). Early-access beta: none of these versions has been
-released as a tag yet.
+versions follow [Semantic Versioning](https://semver.org/). Early-access beta; the first tagged release is 0.3.1.
 
 ## [Unreleased]
+
+## [0.3.2] - 2026-10-30
+
+### Changed
+
+- GitHub Marketplace metadata only: the `description` in `action.yml` is shorter (the Marketplace accepts fewer than
+  125 characters). No change in behavior; the binaries in `dist/` differ only in the version they report.
+
+## [0.3.1] - 2026-10-30
 
 ### Added
 
@@ -12,8 +20,6 @@ released as a tag yet.
   examples in `examples/`.
 - Leak guard (`scripts/leak-guard.sh`, over the tree and, with `--history`, every version of every file and every
   commit) and the `guard` workflow (gitleaks over the whole history and the leak guard with the private denylist).
-
-## [0.3.1] - 2026-10-30
 
 ### Fixed
 
@@ -88,7 +94,8 @@ released as a tag yet.
 - `dist/` holds `gzip -n` binaries checked against `dist/SHA256SUMS` before every run; container connections not
   attributable to the job are listed apart.
 
-[Unreleased]: https://github.com/openwaf-dev/egress-action/compare/v0.3.1...HEAD
+[Unreleased]: https://github.com/openwaf-dev/egress-action/compare/v0.3.2...HEAD
+[0.3.2]: https://github.com/openwaf-dev/egress-action/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/openwaf-dev/egress-action/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/openwaf-dev/egress-action/compare/v0.2.3...v0.3.0
 [0.2.3]: https://github.com/openwaf-dev/egress-action/compare/v0.2.2...v0.2.3
