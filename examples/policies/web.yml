@@ -1,0 +1,10 @@
+# .github/egress/web.yml: the web front end of the monorepo. A test that posts to a staging API is inspected, so a
+# secret in its body is refused (the job trusts the run's CA through NODE_EXTRA_CA_CERTS).
+version: 1
+mode: enforce
+presets: [github-actions]
+allow:
+  - registry.npmjs.org
+  - api.staging.example.com
+inspect:
+  - api.staging.example.com

@@ -1,0 +1,50 @@
+name: guard
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: guard-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Nothing private may land here: secrets (gitleaks over the whole history) and the leak guard over the tree and every
+  # version of every file and commit. The guard's private denylist comes from the LEAK_DENYLIST secret, which pull
+  # requests from forks don't get (built-in rules only); a push to main without it fails.
+  guard:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Secret scan (gitleaks, full history)
+        env:
+          GITLEAKS_VERSION: 8.30.1
+          GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+        run: |
+          curl -sSfLo /tmp/gitleaks.tgz "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          echo "${GITLEAKS_SHA256}  /tmp/gitleaks.tgz" | sha256sum -c -
+          tar -xzf /tmp/gitleaks.tgz -C /tmp gitleaks
+          /tmp/gitleaks git --redact=100 --no-banner .
+      - name: Leak guard (tree and history)
+        env:
+          LEAK_DENYLIST: ${{ secrets.LEAK_DENYLIST }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          if [ -z "$LEAK_DENYLIST" ]; then
+            if [ "$EVENT" = push ]; then echo "LEAK_DENYLIST secret missing" >&2; exit 1; fi
+            scripts/leak-guard.sh --history .
+          else
+            f=$(mktemp) && chmod 600 "$f"
+            printf '%s\n' "$LEAK_DENYLIST" >"$f"
+            LEAK_DENYLIST_FILE="$f" scripts/leak-guard.sh --history .
+            rm -f "$f"
+          fi

@@ -1,0 +1,84 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # the secret scan reads the whole history
+      - name: Secret scan (gitleaks, full history)
+        env:
+          GITLEAKS_VERSION: 8.30.1
+          GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+        run: |
+          curl -sSfLo /tmp/gitleaks.tgz "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          echo "${GITLEAKS_SHA256}  /tmp/gitleaks.tgz" | sha256sum -c -
+          tar -xzf /tmp/gitleaks.tgz -C /tmp gitleaks
+          /tmp/gitleaks git --redact=100 --no-banner .
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: go.mod
+      - name: gofmt
+        run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+      - run: go vet ./...
+      - run: go test -race -count=1 ./...
+      - name: dist/ is the reproducible build of this source
+        env:
+          GOTOOLCHAIN: local
+        run: scripts/build-dist.sh --check
+      - run: shellcheck -S warning scripts/*.sh tests/*.sh
+
+  # The action on a GitHub-hosted runner (root through sudo, one job per VM: lock-all): tests/probes.sh checks that
+  # audit lets everything through and enforce refuses what is outside .github/egress-selftest.yml, for the job,
+  # tools that ignore the proxy, fronting, Azure accounts, DLP, containers (also at start), compose, builds and pulls.
+  probes:
+    needs: test
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [audit, enforce]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./
+        with:
+          policy: .github/egress-selftest.yml
+          mode: ${{ matrix.mode }}
+          containers: lock-all
+      - run: tests/probes.sh ${{ matrix.mode }}
+
+  # End to end with the control plane: GitHub OIDC token, exchange, events. Needs this repository registered in the
+  # OpenWAF organization; on once the endpoints are live (repository variable EGRESS_SEND_TEST=on).
+  send-events:
+    needs: test
+    if: vars.EGRESS_SEND_TEST == 'on'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./
+        with:
+          policy: .github/egress-selftest.yml
+          mode: enforce
+          send-events: "on"
+      - name: some traffic, one destination refused
+        run: |
+          curl -sSf -o /dev/null https://proxy.golang.org/
+          curl -sS --max-time 10 -o /dev/null https://example.org/ || true
+      - name: the destinations reach OpenWAF
+        run: |
+          out=$("$EGRESS_CI_STATE/egress-ci" report -state "$EGRESS_CI_STATE" -summary /dev/null -send)
+          echo "$out"
+          grep -q "destinations sent to OpenWAF" <<<"$out"

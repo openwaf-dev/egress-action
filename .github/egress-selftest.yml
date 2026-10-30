@@ -1,0 +1,14 @@
+# Policy of the action's own tests (.github/workflows/ci.yml, tests/probes.sh).
+version: 1
+mode: audit
+presets: [github-actions]
+allow:
+  - proxy.golang.org
+  - httpbin.org
+  - auth.docker.io
+  - registry-1.docker.io
+  - production.cloudflare.docker.com
+  - production.cloudfront.docker.com
+  - dash.openwaf.dev         # send-events test (the report is sent mid-job, inside the lock)
+inspect:
+  - httpbin.org

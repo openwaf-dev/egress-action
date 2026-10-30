@@ -1,0 +1,27 @@
+# Docker: the job's docker, docker compose and docker build go through the job's own socket (DOCKER_HOST). Containers
+# and build steps are held to the same policy as the job; image pulls are checked by registry. The job builder's
+# image (moby/buildkit) and the base images come from Docker Hub (policies/docker.yml).
+name: image
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: openwaf-dev/egress-action@v0.3.1
+        with:
+          policy: .github/egress-docker.yml
+          containers: lock-all
+      # RUN steps reach only what the policy allows (here, the Go module proxy).
+      - run: docker build -t app:ci .
+      - run: docker run --rm app:ci /app --version
+      # Service to service traffic inside the job's networks is not restricted.
+      - run: docker compose up --abort-on-container-exit --exit-code-from tests

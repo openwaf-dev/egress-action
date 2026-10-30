@@ -1,0 +1,12 @@
+# .github/egress-docker.yml: Docker Hub (the job builder's moby/buildkit image included: the builder and the job's
+# containers pull through the lock) and a Go build inside the Dockerfile.
+version: 1
+mode: enforce
+presets: [github-actions]
+allow:
+  - auth.docker.io # Docker Hub tokens
+  - registry-1.docker.io # Docker Hub registry: every docker.io image pull is checked against this name
+  - production.cloudflare.docker.com # Docker Hub layers
+  - production.cloudfront.docker.com
+  - proxy.golang.org
+  - sum.golang.org

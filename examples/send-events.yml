@@ -1,0 +1,25 @@
+# Send the job's destinations, blocks and detections to your organization's OpenWAF Egress events. The job asks
+# GitHub for an OIDC token (id-token: write), the post step exchanges it at the OpenWAF API for a 15-minute token and
+# sends one event per destination; never request bodies, headers or URLs. The repository must be registered in an
+# OpenWAF organization with Egress enabled. If sending fails, the job summary says why and the job goes on.
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: openwaf-dev/egress-action@v0.3.1
+        with:
+          mode: enforce
+          send-events: "on"
+      - run: make test

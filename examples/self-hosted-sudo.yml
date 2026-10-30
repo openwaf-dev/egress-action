@@ -1,0 +1,24 @@
+# Self-hosted Linux runner whose job user has passwordless sudo (or is in the docker group: the sidecar then runs in
+# a privileged container). The lock only matches the job user's sockets and the job's Docker networks, so other
+# runner users on the same host are not affected. Do not use containers: lock-all on a host that runs several jobs
+# at once: it refuses every container's traffic outside this job's policy.
+name: test
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: [self-hosted, linux, x64]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: openwaf-dev/egress-action@v0.3.1
+        with:
+          lock: "on" # needs nftables (nft) and iproute2 (ip) on the host
+          containers: track
+          no-proxy: build-cache.internal.example.com # a host your proxy-aware tools reach directly
+      - run: make test

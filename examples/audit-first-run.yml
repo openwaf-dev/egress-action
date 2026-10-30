@@ -1,0 +1,25 @@
+# First run: audit. Nothing is refused; the job summary lists every destination of the job and, under «Names outside
+# the policy», a ready-made allow list. Copy it into .github/egress.yml (policies/egress.yml is a starting point).
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # First step after checkout: the steps before it are not covered.
+      - uses: openwaf-dev/egress-action@v0.3.1
+        with:
+          mode: audit # overrides the file, so the same policy can be tried in audit before it is enforced
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: go.mod
+      - run: go test ./...

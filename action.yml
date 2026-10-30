@@ -1,0 +1,39 @@
+name: OpenWAF Egress CI
+description: Route a job's outbound traffic through an allowlist proxy with DNS logging, an nftables lock, DLP on what leaves and a per-run report.
+author: OpenWAF
+inputs:
+  policy:
+    description: Policy file (allow, inspect, mode).
+    default: .github/egress.yml
+  mode:
+    description: Override the policy mode (audit or enforce). Empty uses the file.
+    default: ""
+  lock:
+    description: "nftables lock scoped to the job's user: auto (on when root is reachable through sudo or Docker), on (fail without it), off."
+    default: auto
+  containers:
+    description: "track: the job's Docker goes through its own socket, its containers and builds are attributed and held to the policy like the job. lock-all: also refuse every other container's traffic outside the policy (runners that run one job at a time). off: Docker untouched."
+    default: track
+  no-proxy:
+    description: Extra comma-separated NO_PROXY entries.
+    default: ""
+  token:
+    description: Token to read GitHub's list of Actions endpoints (api.github.com/meta), for the github-actions preset.
+    default: ${{ github.token }}
+  send-events:
+    description: "on: send the job's destinations, blocks and detections to the organization's OpenWAF Egress events (GitHub OIDC, audience openwaf-egress-ci; the job needs permissions: id-token: write and the repository registered in OpenWAF). A failure never fails the job."
+    default: "off"
+  openwaf-api:
+    description: OpenWAF API base URL for send-events.
+    default: https://dash.openwaf.dev
+outputs:
+  proxy:
+    description: Proxy URL (http://127.0.0.1:PORT).
+runs:
+  using: node24
+  main: start.js
+  post: stop.js
+  post-if: always()
+branding:
+  icon: shield
+  color: blue

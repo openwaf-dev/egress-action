@@ -1,0 +1,27 @@
+# Enforce: anything outside .github/egress.yml is refused (HTTPS_PROXY answers 403, DNS answers NXDOMAIN, other
+# connections are reset) and a secret in a request to a plain HTTP or inspected host is refused too. The job summary
+# says what was refused and why.
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: openwaf-dev/egress-action@v0.3.1
+        with:
+          mode: enforce
+          lock: "on" # fail the step instead of running without the nftables lock
+          containers: lock-all # GitHub-hosted runners run one job per VM: refuse any container's traffic outside the policy
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: go.mod
+      - run: go test ./...

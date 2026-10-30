@@ -1,0 +1,7 @@
+# .github/egress/api.yml: the Go service of the monorepo.
+version: 1
+mode: enforce
+presets: [github-actions]
+allow:
+  - proxy.golang.org
+  - sum.golang.org

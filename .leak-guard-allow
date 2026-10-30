@@ -1,0 +1,26 @@
+# Reviewed false positives of scripts/leak-guard.sh: path<TAB>ERE matched against the flagged line, or against the
+# address alone for the IPv4 rule (path@blob: only that version of the file).
+# Public addresses the tests and the probes use as examples of a well-known destination, and the DNS fallback.
+cmd/egress-ci/dns.go	^1\.1\.1\.1$
+cmd/egress-ci/egress_ci_test.go	^(1\.1\.1\.1|104\.18\.24\.232|140\.82\.112\.3|142\.250\.0\.1|93\.184\.215\.14|172\.17\.0\.5)$
+tests/probes.sh	^1\.1\.1\.1$
+# Docker's address pool (172.16.0.0/12): the lock leaves the runner's Docker networks to their own rules.
+cmd/egress-ci/nft.go	^172\.16\.0\.0$
+scripts/start.sh	^172\.16\.0\.0$
+README.md	^172\.16\.0\.0$
+README.es.md	^172\.16\.0\.0$
+# The DLP test sends the header of a private key (no key) and must see it refused.
+cmd/egress-ci/egress_ci_test.go	"-----BEGIN OPENSSH PRIVATE KEY-----"
+# TLS ClientHello (the record the proxies read the SNI from) matches a denylist expression meant for other text.
+cmd/egress-ci/proxy.go	ClientHello
+cmd/egress-ci/tproxy.go	ClientHello
+cmd/egress-ci/egress_ci_test.go	ClientHello
+# Older versions of three files that named the runner of the action's first pilot in comments; the current files no
+# longer do. Exempt by exact version only.
+cmd/egress-ci/nft.go@d47c2672b274	runs two slots
+cmd/egress-ci/nft.go@e47e52336943	runs two slots
+cmd/egress-ci/nft.go@8bb524743d8d	runs two slots
+cmd/egress-ci/nft.go@06b637e91b10	runs two slots
+cmd/egress-ci/main.go@b5802137acdf	docker-label@<slot>
+cmd/egress-ci/main.go@cdfe510991f4	docker-label@<slot>
+scripts/start.sh@95557db70c8e	labels each slot

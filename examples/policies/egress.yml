@@ -1,0 +1,9 @@
+# .github/egress.yml: a starting point for a Go and npm project. Start in audit and add what the summary lists.
+version: 1
+mode: audit
+presets: [github-actions] # GitHub's published names for Actions runners, plus raw.githubusercontent.com
+allow:
+  - proxy.golang.org # Go modules and toolchains
+  - sum.golang.org # Go checksum database
+  - registry.npmjs.org
+inspect: []
