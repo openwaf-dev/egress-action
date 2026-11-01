@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"net"
 	"net/http"
@@ -15,16 +17,22 @@ import (
 // transparent takes every TCP connection of the job's user and of its containers that did not go through
 // HTTPS_PROXY (nftables redirects them here: the runner itself, tools that ignore the proxy variables, containers).
 // It names the connection from its TLS SNI or HTTP Host, checks that name against the policy and that the
-// original address is one the name resolves to (an allowed SNI sent to another address is fronting), then
-// connects to the original address. A connection without a name passes only to an address an allowed name
-// resolved to.
+// original address is one the name resolves to or, for TLS, a server holding a valid certificate for that name (an
+// allowed SNI sent to another server is fronting), then connects to the original address. A connection without a
+// name passes only to an address an allowed name resolved to.
 type transparent struct {
-	p   *proxy
-	dns *dnsServer
-	ct  *containerTracker
+	p      *proxy
+	dns    *dnsServer
+	ct     *containerTracker
+	daemon *daemonWindow  // the job's Docker operations that make the daemon reach a registry (nil: none tracked)
+	roots  *x509.CertPool // roots for servesName (nil: the system's)
 }
 
 func (t *transparent) serve(ln net.Listener) {
+	acceptLoop(ln, t.handle)
+}
+
+func acceptLoop(ln net.Listener, handle func(net.Conn)) {
 	for {
 		c, err := ln.Accept()
 		if err != nil {
@@ -33,7 +41,7 @@ func (t *transparent) serve(ln net.Listener) {
 			}
 			continue
 		}
-		go t.handle(c)
+		go handle(c)
 	}
 }
 
@@ -69,7 +77,7 @@ func (t *transparent) handle(c net.Conn) {
 	if len(peeked) > 0 && !bytes.HasPrefix(peeked, []byte{0x16}) {
 		ev.Detections = dedupe(append(ev.Detections, scanText(host, string(peeked))...))
 	}
-	ev.Decision, ev.Reason = t.decide(name, known, ip, dst.Port)
+	ev.Decision, ev.Reason = t.decide(name, len(peeked) > 0 && peeked[0] == 0x16, known, ip, dst.Port)
 	if ev.Decision == "allow" && len(ev.Detections) > 0 && hasDLP(ev.Detections) {
 		ev.Decision, ev.Reason = "audit", "dlp"
 		if t.p.enforce {
@@ -100,9 +108,9 @@ func hasDLP(dets []string) bool {
 	return false
 }
 
-// decide: a named connection needs an allowed name whose DNS answers include the address; an unnamed one needs an
-// address some allowed name resolved to.
-func (t *transparent) decide(name string, known []string, ip string, port int) (string, string) {
+// decide: a named connection needs an allowed name whose DNS answers include the address, or, for TLS, a server at
+// the address that proves it is that name; an unnamed one needs an address some allowed name resolved to.
+func (t *transparent) decide(name string, tlsHello bool, known []string, ip string, port int) (string, string) {
 	verdict := func(ok bool, reason string) (string, string) {
 		switch {
 		case ok:
@@ -117,6 +125,10 @@ func (t *transparent) decide(name string, known []string, ip string, port int) (
 			return verdict(false, "not_allowed")
 		}
 		if contains(known, normHost(name)) || t.resolvesTo(name, ip) {
+			return verdict(true, "")
+		}
+		if tlsHello && t.servesName(name, ip, port) {
+			t.dns.remember(normHost(name), []string{ip})
 			return verdict(true, "")
 		}
 		return verdict(false, "name_ip_mismatch")
@@ -139,6 +151,23 @@ func (t *transparent) resolvesTo(name, ip string) bool {
 	}
 	t.dns.remember(normHost(name), addrs)
 	return contains(addrs, ip)
+}
+
+// servesName reports whether the server at ip:port proves it is name: a TLS handshake for name whose certificate
+// chains to trusted roots. Registries and CDNs (ghcr.io, registry-1.docker.io) answer each query with another part
+// of their addresses, so the address a client got from a resolver of its own (a cache, the Docker daemon's embedded
+// DNS) is often not in the sidecar's answers. An allowed SNI sent to a server that is not that name (fronting to an
+// address of one's own) still fails.
+func (t *transparent) servesName(name, ip string, port int) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	raw, err := t.p.dialer.DialContext(ctx, "tcp", net.JoinHostPort(ip, strconv.Itoa(port)))
+	if err != nil {
+		return false
+	}
+	defer raw.Close()
+	tc := tls.Client(raw, &tls.Config{ServerName: name, RootCAs: t.roots, MinVersion: tls.VersionTLS12})
+	return tc.HandshakeContext(ctx) == nil
 }
 
 // peekName reads, without consuming, the TLS ClientHello's SNI or an HTTP request's Host. Protocols where the server

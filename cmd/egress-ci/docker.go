@@ -135,7 +135,8 @@ type dockerProxy struct {
 	ct       *containerTracker // nil: no address tracking (runner slot mode)
 	client   *http.Client
 	rp       *httputil.ReverseProxy
-	jobNet   string // the job's bridge network (job mode): containers asking for the default bridge get it
+	jobNet   string        // the job's bridge network (job mode): containers asking for the default bridge get it
+	window   *daemonWindow // the job's operations that make the daemon reach a registry (nil: not observed)
 
 	regMu    sync.Mutex
 	registry *os.File // optional: "kind id" of everything created, one per line
@@ -166,6 +167,9 @@ var (
 	reConnect  = regexp.MustCompile(`^(?:/v[0-9.]+)?/networks/[^/]+/connect$`)
 	reNetwork  = regexp.MustCompile(`^(?:/v[0-9.]+)?/networks/([^/]+)$`)
 	rePull     = regexp.MustCompile(`^(?:/v[0-9.]+)?/images/create$`)
+	rePush     = regexp.MustCompile(`^(?:/v[0-9.]+)?/images/(.+)/push$`)
+	reBuild    = regexp.MustCompile(`^(?:/v[0-9.]+)?/build$`)
+	reAuth     = regexp.MustCompile(`^(?:/v[0-9.]+)?/auth$`)
 	defaultNet = map[string]bool{"": true, "default": true, "bridge": true}
 )
 
@@ -205,7 +209,21 @@ func (d *dockerProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 			d.log.add(ev)
+			switch tag := r.URL.Query().Get("tag"); {
+			case tag == "" || strings.Contains(img, "@"):
+			case strings.Contains(tag, ":"): // a digest
+				img += "@" + tag
+			default:
+				img += ":" + tag
+			}
+			defer d.window.begin("pull " + img)()
 		}
+	case r.Method == http.MethodPost && rePush.MatchString(r.URL.Path):
+		defer d.window.begin("push " + rePush.FindStringSubmatch(r.URL.Path)[1])()
+	case r.Method == http.MethodPost && reBuild.MatchString(r.URL.Path):
+		defer d.window.begin("build")()
+	case r.Method == http.MethodPost && reAuth.MatchString(r.URL.Path):
+		defer d.window.begin("login")()
 	}
 	d.rp.ServeHTTP(w, r)
 }

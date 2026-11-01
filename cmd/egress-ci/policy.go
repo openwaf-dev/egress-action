@@ -48,6 +48,15 @@ func loadPolicy(path string) (*Policy, error) {
 	return &p, nil
 }
 
+// override applies the action's mode input over the file's (empty keeps the file's).
+func (p *Policy) override(mode string) error {
+	if mode == "" {
+		return nil
+	}
+	p.Mode = mode
+	return p.compile()
+}
+
 func (p *Policy) compile() error {
 	if p.Version != 0 && p.Version != 1 {
 		return fmt.Errorf("version %d not supported (1)", p.Version)

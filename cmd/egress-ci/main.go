@@ -15,6 +15,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -57,6 +58,7 @@ func cmdCheck(args []string) error {
 	fs := flag.NewFlagSet("check", flag.ExitOnError)
 	policy := fs.String("policy", ".github/egress.yml", "policy file")
 	meta := fs.String("github-meta", "", "api.github.com/meta copy for the github-actions preset")
+	mode := fs.String("mode", "", "override the policy mode (audit, enforce), as run does")
 	_ = fs.Parse(args)
 	if *meta != "" {
 		if err := useGitHubMeta(*meta); err != nil {
@@ -65,6 +67,9 @@ func cmdCheck(args []string) error {
 	}
 	p, err := loadPolicy(*policy)
 	if err != nil {
+		return err
+	}
+	if err := p.override(*mode); err != nil {
 		return err
 	}
 	fmt.Printf("%s: mode %s, %d allow rules (github-actions preset from %s), %d inspected\n", *policy, p.Mode, len(p.allow), activeGitHubMeta.Source, len(p.inspect))
@@ -118,6 +123,7 @@ type Meta struct {
 	UID         int       `json:"uid"`
 	Lock        string    `json:"lock"`   // on, off, failed: …
 	Docker      string    `json:"docker"` // tracked, off, failed: …
+	Daemon      string    `json:"daemon"` // the Docker daemon's connections for the job's pulls: observed (cgroups), off, failed: …
 	Proxy       []string  `json:"proxy"`
 	DNS         string    `json:"dns"`
 	Transparent string    `json:"transparent"`
@@ -183,11 +189,8 @@ func cmdRun(args []string) error {
 	if err != nil {
 		return err
 	}
-	if *mode != "" {
-		pol.Mode = *mode
-		if err := pol.compile(); err != nil {
-			return err
-		}
+	if err := pol.override(*mode); err != nil {
+		return err
 	}
 	enforce := pol.Mode == "enforce"
 	raw, _ := os.ReadFile(*policyPath)
@@ -260,6 +263,7 @@ func cmdRun(args []string) error {
 	if *dockerSock != "" {
 		ct = newContainerTracker(lock, elog)
 		dp = newDockerProxy(*dockerSock, *uid, map[string]string{jobLabel: strconv.Itoa(*uid)}, pol, enforce, elog, ct)
+		dp.window = &daemonWindow{}
 		path := filepath.Join(*state, "docker.sock")
 		err := dp.ensureJobNetwork("egress-ci-" + strconv.Itoa(*uid))
 		if err == nil {
@@ -274,11 +278,37 @@ func cmdRun(args []string) error {
 			meta.Docker, meta.DockerSock = "tracked", path
 		}
 	}
+	// The daemon's own connections for the job's pulls (daemon.go): recorded, never refused.
+	meta.Daemon = "off"
+	var daemonLn net.Listener
+	if lock != nil && dp != nil {
+		meta.Daemon = "off: no Docker daemon cgroup found"
+		if cgs := daemonCgroups(*chroot, *dockerSock); len(cgs) > 0 {
+			daemonLn, err = net.Listen("tcp4", net.JoinHostPort(daemonAddr, strconv.Itoa(ls.port+2)))
+			if err == nil {
+				if err = lock.observeDaemon(cgs, ls.port+2); err != nil {
+					daemonLn.Close()
+					daemonLn = nil
+				}
+			}
+			if err != nil {
+				meta.Daemon = "failed: " + err.Error()
+			} else {
+				meta.Daemon = "observed (" + strings.Join(cgs, ", ") + ")"
+			}
+		}
+	}
 
 	ds := &dnsServer{pol: pol, enforce: enforce, log: elog, upstreams: resolvConfUpstreams("/etc/resolv.conf"), lock: lock, ct: ct, allowed: map[string]bool{}}
 	px := newProxy(pol, enforce, elog, ca)
 	srv := &http.Server{Handler: px, ReadHeaderTimeout: 30 * time.Second}
 	tp := &transparent{p: px, dns: ds, ct: ct}
+	if dp != nil {
+		tp.daemon = dp.window
+	}
+	if daemonLn != nil {
+		go tp.serveDaemon(daemonLn)
+	}
 	for _, c := range ls.udp {
 		go ds.serveUDP(c)
 	}
@@ -296,8 +326,8 @@ func cmdRun(args []string) error {
 	if err := writeJSON(filepath.Join(*state, "meta.json"), meta); err != nil {
 		return err
 	}
-	fmt.Printf("egress-ci %s: mode %s, proxy %s, dns %s, transparent %s, lock %s, docker %s\n", version, pol.Mode,
-		strings.Join(meta.Proxy, " "), meta.DNS, meta.Transparent, meta.Lock, meta.Docker)
+	fmt.Printf("egress-ci %s: mode %s, proxy %s, dns %s, transparent %s, lock %s, docker %s, daemon %s\n", version, pol.Mode,
+		strings.Join(meta.Proxy, " "), meta.DNS, meta.Transparent, meta.Lock, meta.Docker, meta.Daemon)
 
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGTERM, syscall.SIGINT)
@@ -311,7 +341,7 @@ func cmdRun(args []string) error {
 	}
 	cancel()
 	stop()
-	ls.close()
+	ls.close() // daemonLn stays open until the table is gone: the daemon serves the whole runner
 	if ct != nil {
 		meta.Containers = ct.containers()
 	}

@@ -20,7 +20,7 @@ import (
 type Dest struct {
 	Host        string   `json:"host"`
 	Ports       []int    `json:"ports"`
-	Via         []string `json:"via"`                  // proxy (HTTPS_PROXY), direct (caught by the lock), container, udp, dns
+	Via         []string `json:"via"`                  // proxy (HTTPS_PROXY), direct (caught by the lock), container, docker (image pulls and the daemon's connections for them), udp, dns
 	Containers  []string `json:"containers,omitempty"` // the job's containers that connected
 	Connections int      `json:"connections"`
 	Up          int64    `json:"bytes_up"`
@@ -149,17 +149,28 @@ func buildReport(state string) (*Report, error) {
 				continue
 			}
 			if e.Kind == "docker" {
-				if e.Method == "pull" {
-					s := e.Note + ": " + e.Decision
-					if e.Reason != "" {
-						s += " (" + e.Reason + ")"
-					}
-					rep.Pulls = appendUnique(rep.Pulls, s)
+				if e.Method != "pull" {
+					continue
 				}
-				continue
+				s := e.Note + ": " + e.Decision
+				if e.Reason != "" {
+					s += " (" + e.Reason + ")"
+				}
+				rep.Pulls = appendUnique(rep.Pulls, s)
 			}
 			d := get(e.Host)
 			switch e.Kind {
+			case "docker":
+				// The registry of a pull through the job's socket, checked by name (enforce refuses the pull).
+				addVia(d, "docker")
+				d.Connections++
+			case "daemon":
+				// The daemon's own connections while the job pulls (token service, layer CDN): never refused.
+				addVia(d, "docker")
+				addPort(d, e.Port)
+				d.Connections++
+				d.Up += e.Up
+				d.Down += e.Down
 			case "dns":
 				rep.DNSQueries++
 				addVia(d, "dns")
@@ -349,7 +360,10 @@ func renderMarkdown(rep *Report, link string) string {
 		fmt.Fprintf(&b, "\nThe job's containers (through its Docker socket; their DNS and TCP pass the sidecar like the job's): %s\n", codeList(m.Containers))
 	}
 	if len(rep.Pulls) > 0 {
-		fmt.Fprintf(&b, "\nImage pulls: %s\n", codeList(rep.Pulls))
+		fmt.Fprintf(&b, "\nImage pulls (checked by registry): %s\n", codeList(rep.Pulls))
+		if !strings.HasPrefix(m.Daemon, "observed") {
+			fmt.Fprintf(&b, "The Docker daemon's own connections for them (token service, layer CDN) were not observed: %s.\n", m.Daemon)
+		}
 	}
 	if len(rep.OtherCts) > 0 {
 		fmt.Fprintf(&b, "\n<details><summary>%d flows from containers that are not this job's (other jobs on the runner, or Docker used without the job's socket)</summary>\n\n%s\n</details>\n", len(rep.OtherCts), codeList(rep.OtherCts))
@@ -357,7 +371,7 @@ func renderMarkdown(rep *Report, link string) string {
 	if rep.InspectNote != "" {
 		b.WriteString("\n" + rep.InspectNote + ".\n")
 	}
-	b.WriteString("\nVia: `proxy` through HTTPS_PROXY, `direct` caught by the lock (tools that ignore the proxy variables, the runner itself), `container` the job's containers, `udp` non-TCP flows, `dns` only resolved. Every TCP connection is named by its TLS SNI or HTTP Host and checked against the address it went to.\n")
+	b.WriteString("\nVia: `proxy` through HTTPS_PROXY, `direct` caught by the lock (tools that ignore the proxy variables, the runner itself), `container` the job's containers, `docker` the registries of the job's image pulls and the Docker daemon's connections while it pulls them (recorded, not refused: the daemon serves the whole runner), `udp` non-TCP flows, `dns` only resolved. Every TCP connection is named by its TLS SNI or HTTP Host and checked against the address it went to.\n")
 	if link != "" {
 		fmt.Fprintf(&b, "\nEvents: %s\n", link)
 	}

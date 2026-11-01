@@ -57,6 +57,39 @@ jobs:
           containers: lock-all
       - run: tests/probes.sh ${{ matrix.mode }}
 
+  # Audit, then enforce with what audit suggested (tests/pulls.sh): docker pull from Docker Hub and ghcr.io (the
+  # daemon's connections) and a build from both (the job builder's), starting from the github-actions preset alone.
+  pulls-audit:
+    needs: test
+    runs-on: ubuntu-24.04
+    outputs:
+      allow: ${{ steps.pulls.outputs.allow }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: |
+          printf 'version: 1\nmode: audit\npresets: [github-actions]\n' >"$RUNNER_TEMP/egress-pulls.yml"
+      - uses: ./
+        with:
+          policy: ${{ runner.temp }}/egress-pulls.yml
+      - id: pulls
+        run: tests/pulls.sh audit
+
+  pulls-enforce:
+    needs: pulls-audit
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - env:
+          ALLOW: ${{ needs.pulls-audit.outputs.allow }}
+        run: |
+          { printf 'version: 1\nmode: audit\npresets: [github-actions]\nallow:\n'; tr ',' '\n' <<<"$ALLOW" | sed 's/^/  - /'; } >"$RUNNER_TEMP/egress-pulls.yml"
+          cat "$RUNNER_TEMP/egress-pulls.yml"
+      - uses: ./
+        with:
+          policy: ${{ runner.temp }}/egress-pulls.yml
+          mode: enforce
+      - run: tests/pulls.sh enforce
+
   # End to end with the control plane: GitHub OIDC token, exchange, events. Needs this repository registered in the
   # OpenWAF organization; on once the endpoints are live (repository variable EGRESS_SEND_TEST=on).
   send-events:

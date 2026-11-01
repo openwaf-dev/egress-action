@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -354,7 +355,7 @@ func TestTransparentDecisions(t *testing.T) {
 			{"evil.example", "198.51.100.7", refuse, "not_allowed"},          // named, outside the policy
 			{"", "198.51.100.7", refuse, "not_allowed"},                      // unnamed, only a name outside the policy
 		} {
-			got, reason := tp.decide(c.name, ds.namesFor(c.ip), c.ip, 443)
+			got, reason := tp.decide(c.name, false, ds.namesFor(c.ip), c.ip, 443)
 			if got != c.want || reason != c.reason {
 				t.Errorf("enforce=%v decide(%q, %s) = %s %s, want %s %s", enforce, c.name, c.ip, got, reason, c.want, c.reason)
 			}
@@ -412,5 +413,125 @@ func TestDockerSocketLabelsAndPullPolicy(t *testing.T) {
 	d.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/v1.47/images/create?fromImage=ghcr.io%2Fx%2Fy&tag=1", nil))
 	if rec.Code != http.StatusForbidden || calls != 2 {
 		t.Fatalf("pull from ghcr.io: status %d, daemon calls %d (2 creates before)", rec.Code, calls)
+	}
+}
+
+// An allowed SNI to an address the sidecar's own lookup did not return (a registry or CDN that answers each query
+// with another of its addresses) passes when the server there holds a valid certificate for the name; a server
+// without one is still fronting.
+func TestTransparentAcceptsAddressProvenByCertificate(t *testing.T) {
+	srv := httptest.NewTLSServer(http.NotFoundHandler()) // certificate for example.com, *.example.com
+	defer srv.Close()
+	addr := srv.Listener.Addr().(*net.TCPAddr)
+	roots := x509.NewCertPool()
+	roots.AddCert(srv.Certificate())
+	pol := mustPolicy(t, "allow: [\"www.example.com:*\", \"proxy.golang.org:*\"]\n")
+	for _, enforce := range []bool{false, true} {
+		log, _ := openEventLog(filepath.Join(t.TempDir(), "e.jsonl"))
+		defer log.close()
+		px := newProxy(pol, enforce, log, nil)
+		px.dialer.Control = nil // the test server is on loopback
+		ds := &dnsServer{pol: pol}
+		tp := &transparent{p: px, dns: ds, roots: roots}
+		ip := addr.IP.String()
+		if got, reason := tp.decide("www.example.com", true, nil, ip, addr.Port); got != "allow" || reason != "" {
+			t.Errorf("enforce=%v: valid certificate at another address: %s %s, want allow", enforce, got, reason)
+		}
+		if !contains(ds.namesFor(ip), "www.example.com") {
+			t.Errorf("enforce=%v: the proven address is not remembered for the name", enforce)
+		}
+		refuse := map[bool]string{false: "audit", true: "block"}[enforce]
+		if got, reason := tp.decide("proxy.golang.org", true, nil, ip, addr.Port); got != refuse || reason != "name_ip_mismatch" {
+			t.Errorf("enforce=%v: certificate for another name: %s %s, want %s name_ip_mismatch", enforce, got, reason, refuse)
+		}
+		if got, reason := tp.decide("www.example.com", false, nil, "198.51.100.9", addr.Port); got != refuse || reason != "name_ip_mismatch" {
+			t.Errorf("enforce=%v: no TLS to prove the name: %s %s, want %s name_ip_mismatch", enforce, got, reason, refuse)
+		}
+	}
+}
+
+// The daemon's connections are recorded while a pull of the job is in flight through its socket, and a little after.
+func TestDaemonWindowFollowsTheJobsPulls(t *testing.T) {
+	log, _ := openEventLog(filepath.Join(t.TempDir(), "e.jsonl"))
+	defer log.close()
+	d := newDockerProxy("/nonexistent.sock", 1001, nil, mustPolicy(t, "allow: [ghcr.io]\n"), true, log, nil)
+	d.window = &daemonWindow{}
+	during := make(chan []string, 4) // what the window held while the daemon served each request
+	daemon := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		during <- d.window.ops(time.Now())
+	}))
+	defer daemon.Close()
+	u, _ := url.Parse(daemon.URL)
+	d.rp.Transport = http.DefaultTransport
+	d.rp.Rewrite = func(r *httputil.ProxyRequest) { r.SetURL(u) }
+	if ops := d.window.ops(time.Now()); len(ops) != 0 {
+		t.Fatalf("window open before any pull: %v", ops)
+	}
+	d.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/v1.47/images/create?fromImage=ghcr.io%2Fx%2Fy&tag=1", nil))
+	if ops := <-during; len(ops) != 1 || ops[0] != "pull ghcr.io/x/y:1" {
+		t.Fatalf("window while the daemon pulls: %v", ops)
+	}
+	now := time.Now()
+	if ops := d.window.ops(now); len(ops) != 1 {
+		t.Errorf("window right after the pull: %v, want it open for %s", ops, daemonGrace)
+	}
+	if ops := d.window.ops(now.Add(daemonGrace + time.Second)); len(ops) != 0 {
+		t.Errorf("window after the grace period: %v", ops)
+	}
+	// A pull the policy refuses never reaches the daemon and opens no window.
+	d.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/v1.47/images/create?fromImage=quay.io%2Fa%2Fb&tag=1", nil))
+	if len(during) != 0 || len(d.window.ops(time.Now().Add(daemonGrace+time.Second))) != 0 {
+		t.Errorf("refused pull reached the daemon or opened the window")
+	}
+}
+
+// Pull registries and the daemon's hosts for them are destinations of the report: outside the policy they are in
+// the suggested allowlist, so the same job in enforce pulls; only a refused registry counts as would-block.
+func TestReportListsRegistriesAndDaemonHosts(t *testing.T) {
+	state := t.TempDir()
+	policy := filepath.Join(state, "policy.yml")
+	if err := os.WriteFile(policy, []byte("allow: [registry-1.docker.io]\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeJSON(filepath.Join(state, "meta.json"), Meta{Mode: "audit", PolicyFile: policy, Daemon: "observed (system.slice/docker.service)"}); err != nil {
+		t.Fatal(err)
+	}
+	var lines []string
+	for _, e := range []Event{
+		{Kind: "docker", Method: "pull", Host: "registry-1.docker.io", Note: "alpine", Decision: "allow"},
+		{Kind: "docker", Method: "pull", Host: "ghcr.io", Note: "ghcr.io/x/y", Decision: "audit", Reason: "registry_not_allowed"},
+		{Kind: "daemon", Host: "registry-1.docker.io", Port: 443, Decision: "allow", Up: 10, Down: 20},
+		{Kind: "daemon", Host: "auth.docker.io", Port: 443, Decision: "allow"},
+		{Kind: "daemon", Host: "production.cloudflare.docker.com", Port: 443, Decision: "allow", Down: 3 << 20},
+		{Kind: "daemon", Host: "ghcr.io", Port: 443, Decision: "allow"},
+		{Kind: "daemon", Host: "pkg-containers.githubusercontent.com", Port: 443, Decision: "allow"},
+		{Kind: "docker", Method: "start", Host: "x", Decision: "allow"},
+	} {
+		b, _ := json.Marshal(e)
+		lines = append(lines, string(b))
+	}
+	if err := os.WriteFile(filepath.Join(state, "events.jsonl"), []byte(strings.Join(lines, "\n")+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	rep, err := buildReport(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"auth.docker.io", "ghcr.io", "pkg-containers.githubusercontent.com", "production.cloudflare.docker.com"}
+	if strings.Join(rep.Suggested, " ") != strings.Join(want, " ") {
+		t.Errorf("suggested %v, want %v", rep.Suggested, want)
+	}
+	if rep.Audited != 1 {
+		t.Errorf("would block %d destinations, want 1 (the refused registry; the daemon is never refused)", rep.Audited)
+	}
+	for _, d := range rep.Dests {
+		if d.Host == "x" || !contains(d.Via, "docker") {
+			t.Errorf("destination %s via %v", d.Host, d.Via)
+		}
+	}
+	for _, e := range ciEvents(rep) {
+		if e.Via != "direct" {
+			t.Errorf("event for %s sent via %q, want direct (a path the control plane accepts)", e.Host, e.Via)
+		}
 	}
 }

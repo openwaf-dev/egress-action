@@ -82,8 +82,11 @@ func ciEvents(rep *Report) []CIEvent {
 				break
 			}
 		}
-		if e.Via == "" {
+		switch e.Via {
+		case "":
 			e.Via = "dns"
+		case "docker": // the control plane's paths: the daemon's connections are caught by the lock
+			e.Via = "direct"
 		}
 		if len(d.Containers) > 0 {
 			e.Container = d.Containers[0]

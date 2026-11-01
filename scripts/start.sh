@@ -48,7 +48,7 @@ if [ ! -s "$meta_cache" ] || [ -n "$(find "$meta_cache" -mmin +360 2>/dev/null)"
 fi
 meta_args=()
 if [ -s "$meta_cache" ]; then cp "$meta_cache" "$state/github-meta.json"; chmod 0644 "$state/github-meta.json"; meta_args=(-github-meta "$state/github-meta.json"); fi
-"$bin" check -policy "$state/policy.yml" "${meta_args[@]}"
+"$bin" check -policy "$state/policy.yml" -mode "$mode" "${meta_args[@]}"
 t_check=$(ms)
 
 how=none
@@ -137,4 +137,4 @@ fi
 echo "proxy=$proxy" >>"$GITHUB_OUTPUT"
 total=$(ms)
 echo "$total" >"$state/start_ms"
-echo "OpenWAF Egress CI: proxy $proxy, lock $(field lock) (via $how), Docker $(field docker), GitHub preset $(field github_meta), started in ${total} ms (binary, policy and GitHub list ${t_check} ms, sidecar ready ${t_ready} ms)"
+echo "OpenWAF Egress CI: mode $(field mode), proxy $proxy, lock $(field lock) (via $how), Docker $(field docker), daemon pulls $(field daemon), GitHub preset $(field github_meta), started in ${total} ms (binary, policy and GitHub list ${t_check} ms, sidecar ready ${t_ready} ms)"
