@@ -30,13 +30,15 @@ echo "suggested: $(jq -c '.suggested_allow' "$rep")"
 fail=0
 case "$mode" in
   audit)
-    for h in registry-1.docker.io auth.docker.io ghcr.io pkg-containers.githubusercontent.com; do
-      jq -e --arg h "$h" '.suggested_allow | index($h)' "$rep" >/dev/null || { echo "FAIL  $h not in the suggested allowlist"; fail=1; }
+    # Each registry, token service and layer CDN: recorded from the daemon's pulls (via docker), and either in the
+    # suggested allowlist or already allowed (ghcr.io is in GitHub's list for Actions, the github-actions preset).
+    cdn=$(jq -r '[.destinations[].host | select(test("^production\\.cloud(flare|front)\\.docker\\.com$"))] | first // "production.cloudflare.docker.com"' "$rep")
+    for h in registry-1.docker.io auth.docker.io "$cdn" ghcr.io pkg-containers.githubusercontent.com; do
+      jq -e --arg h "$h" '.destinations[] | select(.host == $h) | .via | index("docker") != null' "$rep" >/dev/null \
+        || { echo "FAIL  $h not recorded from the daemon's pulls"; fail=1; continue; }
+      jq -e --arg h "$h" '(.suggested_allow | index($h)) or ([.destinations[] | select(.host == $h and .allowed)] | length > 0)' "$rep" >/dev/null \
+        || { echo "FAIL  $h neither allowed nor in the suggested allowlist"; fail=1; }
     done
-    jq -e '.suggested_allow | map(select(test("^production\\.cloud(flare|front)\\.docker\\.com$"))) | length > 0' "$rep" >/dev/null \
-      || { echo "FAIL  no Docker Hub layer CDN in the suggested allowlist"; fail=1; }
-    jq -e '[.destinations[] | select(.host == "registry-1.docker.io" or .host == "ghcr.io") | .via | index("docker")] | all' "$rep" >/dev/null \
-      || { echo "FAIL  registries not recorded via docker"; fail=1; }
     echo "allow=$(jq -r '.suggested_allow | join(",")' "$rep")" >>"${GITHUB_OUTPUT:-/dev/null}"
     ;;
   enforce)
