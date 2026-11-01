@@ -1,0 +1,23 @@
+name: exp
+on:
+  push:
+    branches: [exp-daemon-probe]
+jobs:
+  look:
+    runs-on: ubuntu-24.04
+    steps:
+      - run: |
+          uname -r; docker version --format '{{.Server.Version}}'; docker info --format '{{.Driver}} {{.DriverStatus}}' ; docker info 2>/dev/null | grep -i -E 'storage|containerd|cgroup'
+          cat /etc/resolv.conf | grep -v '^#'
+          pid=$(pgrep -x dockerd); echo dockerd $pid; cat /proc/$pid/cgroup; cat /proc/$(pgrep -x containerd)/cgroup; cat /proc/self/cgroup
+          sudo nft -v
+          sudo nft -f - <<'NFT'
+          table inet exptest {
+            chain o { type nat hook output priority -110; policy accept;
+              meta nfproto ipv4 socket cgroupv2 level 2 "system.slice/docker.service" ip daddr != { 127.0.0.0/8, 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16 } meta l4proto tcp counter
+              meta nfproto ipv4 socket cgroupv2 level 2 "system.slice/containerd.service" meta l4proto tcp counter
+            }
+          }
+          NFT
+          docker pull -q alpine:3; docker pull -q ghcr.io/linuxcontainers/alpine:latest || docker pull -q ghcr.io/home-assistant/amd64-base:latest
+          sudo nft list table inet exptest
