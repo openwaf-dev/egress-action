@@ -18,6 +18,15 @@ jobs:
         with:
           policy: ${{ runner.temp }}/p.yml
           mode: ${{ matrix.mode }}
+      - run: |
+          t=egress_ci_$(id -u)
+          /usr/bin/sudo nft insert rule inet $t job_nat socket cgroupv2 level 2 "system.slice/docker.service" counter
+          /usr/bin/sudo nft insert rule inet $t job_nat meta skuid 0 meta l4proto tcp ip daddr != 127.0.0.0/8 counter
+          docker pull -q busybox:latest
+          /usr/bin/sudo nft list chain inet $t job_nat
+          /usr/bin/sudo cat /proc/$(pgrep -x dockerd | head -1)/cgroup; pgrep -a dockerd
+          /usr/bin/sudo ls -lid /sys/fs/cgroup/system.slice/docker.service
+          grep -c daemon "$EGRESS_CI_STATE/events.jsonl" || true
       - run: tests/pulls.sh enforce
       - if: always()
         run: |
