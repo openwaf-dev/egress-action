@@ -1,0 +1,21 @@
+name: exp
+on:
+  push:
+    branches: [exp-daemon-probe]
+jobs:
+  docker-lock:
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        mode: [audit, enforce]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - run: |
+          mkdir -p "$RUNNER_TEMP/nosudo"; printf '#!/bin/sh\nexit 1\n' >"$RUNNER_TEMP/nosudo/sudo"; chmod +x "$RUNNER_TEMP/nosudo/sudo"
+          echo "$RUNNER_TEMP/nosudo" >>"$GITHUB_PATH"
+          printf 'version: 1\npresets: [github-actions]\nallow: [auth.docker.io, registry-1.docker.io, production.cloudfront.docker.com, production.cloudflare.docker.com, pkg-containers.githubusercontent.com]\n' >"$RUNNER_TEMP/p.yml"
+      - uses: ./
+        with:
+          policy: ${{ runner.temp }}/p.yml
+          mode: ${{ matrix.mode }}
+      - run: tests/pulls.sh enforce
