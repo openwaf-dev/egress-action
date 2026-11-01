@@ -24,6 +24,8 @@ jobs:
           /usr/bin/sudo nft insert rule inet $t job_nat meta skuid 0 meta l4proto tcp ip daddr != 127.0.0.0/8 counter
           /usr/bin/sudo nft insert rule inet $t job_nat socket cgroupv2 level 2 "system.slice/docker.service" meta l4proto tcp counter
           /usr/bin/sudo nft insert rule inet $t job_nat socket cgroupv2 level 2 "system.slice/docker.service" meta l4proto tcp ip daddr != { 127.0.0.0/8, 169.254.0.0/16, 172.16.0.0/12 } fib daddr type != local counter
+          /usr/bin/sudo nft -a list chain inet $t job_nat | grep -n dnat
+          /usr/bin/sudo nft --debug=netlink list chain inet $t job_nat 2>&1 | grep -A3 -i cgroup | head -30
           (while sleep 0.2; do /usr/bin/sudo ss -tnp state all '( dport = :30305 or sport = :30305 )' 2>/dev/null | grep -v State; done) >"$RUNNER_TEMP/ss.txt" & sp=$!
           docker pull -q busybox:latest
           docker pull -q ghcr.io/linuxcontainers/alpine:latest
