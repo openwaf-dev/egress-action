@@ -88,8 +88,14 @@ var reCgroupPath = regexp.MustCompile(`^[A-Za-z0-9_.@:-]+(/[A-Za-z0-9_.@:-]+)*$`
 
 // daemonCgroups returns the cgroup v2 paths (relative to the cgroup root) of the Docker daemon behind sock, found
 // from the socket's peer when it is dockerd, and of the usual systemd units of dockerd and containerd (its image
-// store); never the sidecar's own cgroup.
-func daemonCgroups(chroot, sock string) []string {
+// store); never the sidecar's own cgroup. Without any, why.
+func daemonCgroups(chroot, sock string) ([]string, string) {
+	// nftables takes the path relative to the cgroup namespace of the process that loads the rule.
+	if own, err := os.Readlink("/proc/self/ns/cgroup"); err == nil {
+		if host, err := os.Readlink(filepath.Join(chroot, "/proc/1/ns/cgroup")); err == nil && host != own {
+			return nil, "the sidecar is not in the host's cgroup namespace"
+		}
+	}
 	self := cgroupOf("/proc/self/cgroup")
 	var out []string
 	add := func(p string) {
@@ -110,7 +116,10 @@ func daemonCgroups(chroot, sock string) []string {
 	}
 	add("system.slice/docker.service")
 	add("system.slice/containerd.service")
-	return out
+	if len(out) == 0 {
+		return nil, "no Docker daemon cgroup found"
+	}
+	return out, ""
 }
 
 // cgroupOf reads the cgroup v2 path of a /proc/<pid>/cgroup file ("0::/system.slice/docker.service").

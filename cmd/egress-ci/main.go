@@ -282,8 +282,9 @@ func cmdRun(args []string) error {
 	meta.Daemon = "off"
 	var daemonLn net.Listener
 	if lock != nil && dp != nil {
-		meta.Daemon = "off: no Docker daemon cgroup found"
-		if cgs := daemonCgroups(*chroot, *dockerSock); len(cgs) > 0 {
+		cgs, why := daemonCgroups(*chroot, *dockerSock)
+		meta.Daemon = "off: " + why
+		if len(cgs) > 0 {
 			daemonLn, err = net.Listen("tcp4", net.JoinHostPort(daemonAddr, strconv.Itoa(ls.port+2)))
 			if err == nil {
 				if err = lock.observeDaemon(cgs, ls.port+2); err != nil {

@@ -86,7 +86,9 @@ case "$how" in
     docker image inspect egress-ci-scratch:1 >/dev/null 2>&1 \
       || tar -cf - --files-from /dev/null | docker import - egress-ci-scratch:1 >/dev/null
     docker rm -f "$name" >/dev/null 2>&1 || true
-    docker run -d --name "$name" --privileged --network host --user 0:0 \
+    # The host's cgroup namespace: nftables reads a cgroup path relative to the namespace of whoever loads the rule
+    # (the Docker daemon's unit, for its connections).
+    docker run -d --name "$name" --privileged --network host --cgroupns host --user 0:0 \
       -v /:/host:ro -v /etc/ssl:/etc/ssl:ro -v "$state:$state" -v "$dockersock:$dockersock" \
       --entrypoint "$bin" egress-ci-scratch:1 "${args[@]}" -chroot /host -lock on >/dev/null
     ;;

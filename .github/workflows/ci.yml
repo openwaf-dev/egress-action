@@ -90,6 +90,23 @@ jobs:
           mode: enforce
       - run: tests/pulls.sh enforce
 
+  # The same audit with the lock installed through the job's Docker (self-hosted runners without sudo): sudo hidden.
+  pulls-docker-lock:
+    needs: test
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: |
+          mkdir -p "$RUNNER_TEMP/nosudo" && printf '#!/bin/sh\nexit 1\n' >"$RUNNER_TEMP/nosudo/sudo" && chmod +x "$RUNNER_TEMP/nosudo/sudo"
+          echo "$RUNNER_TEMP/nosudo" >>"$GITHUB_PATH"
+          printf 'version: 1\nmode: audit\npresets: [github-actions]\n' >"$RUNNER_TEMP/egress-pulls.yml"
+      - uses: ./
+        with:
+          policy: ${{ runner.temp }}/egress-pulls.yml
+      - run: |
+          [ "$(cat "$EGRESS_CI_STATE/how")" = docker ] && grep -q '"lock": "on"' "$EGRESS_CI_STATE/meta.json"
+          tests/pulls.sh audit
+
   # End to end with the control plane: GitHub OIDC token, exchange, events. Needs this repository registered in the
   # OpenWAF organization; on once the endpoints are live (repository variable EGRESS_SEND_TEST=on).
   send-events:
