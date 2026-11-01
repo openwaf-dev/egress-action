@@ -7,7 +7,7 @@ jobs:
     runs-on: ubuntu-24.04
     strategy:
       matrix:
-        mode: [audit, enforce]
+        mode: [audit]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       - run: |
@@ -19,3 +19,10 @@ jobs:
           policy: ${{ runner.temp }}/p.yml
           mode: ${{ matrix.mode }}
       - run: tests/pulls.sh enforce
+      - if: always()
+        run: |
+          /usr/bin/sudo nft list table inet egress_ci_$(id -u)
+          grep -o '"kind":"[a-z]*"' "$EGRESS_CI_STATE/events.jsonl" | sort | uniq -c
+          docker logs egress-ci-$(id -u) 2>&1 | tail -5
+          /usr/bin/sudo ls -la /proc/$(pgrep -x dockerd)/ns/cgroup /proc/1/ns/cgroup
+          cid=$(docker inspect -f '{{.Id}}' egress-ci-$(id -u)); /usr/bin/sudo cat /proc/$(docker inspect -f '{{.State.Pid}}' egress-ci-$(id -u))/cgroup

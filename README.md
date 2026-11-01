@@ -87,11 +87,11 @@ Unknown keys are an error: a typo fails the step instead of silently allowing no
 |---|---|
 | Proxy | `HTTPS_PROXY`/`HTTP_PROXY` for the following steps. `CONNECT` tunnels are checked by name and by the TLS SNI (an SNI outside the policy is refused); not decrypted unless the host is under `inspect`. Loopback, link-local (cloud metadata) and multicast destinations are refused. |
 | Lock | An nftables table matching only the job user's sockets: its DNS goes to the forwarder and every other TCP connection to a transparent proxy (the runner itself, tools that ignore the proxy variables). Other flows (UDP, ICMP, IPv6) outside the policy are refused in enforce. |
-| Transparent proxy | Names each connection from its TLS SNI or HTTP Host, checks the name against the policy and that the address it was sent to is one the name resolves to (an allowed SNI sent elsewhere is domain fronting and is refused). A connection without a name passes only to an address an allowed name resolved to. |
+| Transparent proxy | Names each connection from its TLS SNI or HTTP Host, checks the name against the policy and that the address it was sent to is one the name resolves to, or, over TLS, a server holding a valid certificate for that name (registries and CDNs such as `ghcr.io` answer each query with another of their addresses). An allowed SNI sent to a server that is not that name is domain fronting and is refused. A connection without a name passes only to an address an allowed name resolved to. |
 | DNS | Every name is recorded with who asked; names outside the policy get NXDOMAIN in enforce; long high-entropy labels (data encoded into names) are flagged. |
-| Docker | `DOCKER_HOST` points at a socket the sidecar serves. The job's networks are held by subnet from their creation (a container asking for the default bridge gets the job's own network), so a container is covered from its first packet: its DNS and TCP go through the same forwarder and transparent proxy, attributed per container, and the rest is refused in enforce. Containers, networks and volumes get a label. Image pulls are checked by registry before the daemon fetches anything. `docker build` uses a job builder container (`BUILDX_BUILDER`, loads into the daemon), so build steps are the job's too; its BuildKit cache is kept for the next job of the same runner user, up to 4 GB. |
+| Docker | `DOCKER_HOST` points at a socket the sidecar serves. The job's networks are held by subnet from their creation (a container asking for the default bridge gets the job's own network), so a container is covered from its first packet: its DNS and TCP go through the same forwarder and transparent proxy, attributed per container, and the rest is refused in enforce. Containers, networks and volumes get a label. Image pulls are checked by registry before the daemon fetches anything. While the job pulls, pushes, builds or logs in through its socket, the daemon's own connections (registry, token service, layer CDN) go through the transparent proxy and are recorded by name, never refused: the daemon serves the whole runner. `docker build` uses a job builder container (`BUILDX_BUILDER`, loads into the daemon), so build steps are the job's too; its BuildKit cache is kept for the next job of the same runner user, up to 4 GB. |
 | DLP | URL, headers and textual bodies up to 4 MiB of plain HTTP and of inspected HTTPS are scanned: private keys, AWS access keys, `sk-` keys, GitHub tokens (except to GitHub), payment cards (Luhn). In enforce the request is refused. |
-| Report | The job summary: destinations with ports, path (proxy, direct, container, udp), bytes, containers, image pulls, names outside the policy, detections. `report.json` in the post step's log. |
+| Report | The job summary: destinations with ports, path (proxy, direct, container, docker, udp), bytes, containers, image pulls, names outside the policy, detections. The registries of the job's pulls and the hosts the daemon reached for them are in the suggested allowlist, so the job keeps pulling in enforce. `report.json` in the post step's log. |
 
 ## Send events to OpenWAF
 
@@ -111,7 +111,11 @@ goes on. See [the documentation](https://developers.openwaf.dev/egress/ci/send-e
 - Docker used without `DOCKER_HOST` (a tool that opens `/var/run/docker.sock` itself) is not attributed; with
   `lock-all` its traffic outside the policy is refused anyway, otherwise it is listed as not this job's. Containers
   with `--network host` are outside the lock unless they run as the job's user.
-- Image pulls are made by the daemon: the registry is checked, the daemon's own connections are not proxied.
+- The daemon's connections are recorded, not held: in enforce a pull is refused by registry, and the hosts the daemon
+  reaches for an allowed registry are not checked. They are recorded only with cgroup v2 and the daemon in its systemd
+  unit (`docker.service`, `containerd.service`), and attributed by time: on a runner that runs several jobs at once, a
+  pull of another job at the same moment is listed too. Images of `services:` and `container:` are pulled by the
+  runner before the first step, outside the action.
 - Without `inspect`, request bodies over HTTPS are not scanned: the proxies see the destination, not the content.
   Inspecting needs the job to trust a CA created for the run (exported as `NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE`,
   `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE`, `GIT_SSL_CAINFO`); tools with their own trust store or pinning fail.
