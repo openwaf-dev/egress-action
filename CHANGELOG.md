@@ -5,6 +5,32 @@ versions follow [Semantic Versioning](https://semver.org/). Early-access beta; t
 
 ## [Unreleased]
 
+## [0.3.3] - 2026-11-01
+
+### Added
+
+- The Docker daemon's own connections while the job pulls, pushes, builds or logs in through its socket (registry,
+  token service, layer CDN such as `auth.docker.io`, `production.cloudflare.docker.com`,
+  `pkg-containers.githubusercontent.com`): the lock sends the TCP of the daemon's cgroup (`docker.service`,
+  `containerd.service`) to the transparent proxy, which names it by SNI and records it as `docker` in the report and
+  the suggested allowlist. Never refused: the daemon serves the whole runner. `daemon` in `meta.json` and the start
+  line says whether it is observed.
+- CI: `tests/pulls.sh` pulls from Docker Hub and ghcr.io and builds from both; audit with the `github-actions` preset
+  alone, then enforce with the allowlist audit suggested, and the same audit with the lock through Docker.
+
+### Fixed
+
+- The registry of an image pull through the job's socket is a destination of the report: a registry outside the
+  policy is in the suggested allowlist and counts as would-block, so switching to enforce does not refuse the pull.
+  Before, pulls were only listed under "Image pulls".
+- `name_ip_mismatch` false positives toward registries and CDNs whose DNS answers each query with another of their
+  addresses (`ghcr.io`, `registry-1.docker.io`), seen from the job builder when it resolves through the Docker
+  daemon's embedded DNS: an allowed TLS name sent to an address the sidecar's lookup did not return passes when the
+  server there holds a valid certificate for that name. Fronting to a server of one's own is still refused.
+- The start of the step printed the policy file's mode (`mode audit`) when the `mode` input was `enforce`; the start
+  line now also shows the effective mode.
+- With the lock installed through Docker, the sidecar container runs in the host's cgroup namespace.
+
 ## [0.3.2] - 2026-10-30
 
 ### Changed
@@ -94,7 +120,8 @@ versions follow [Semantic Versioning](https://semver.org/). Early-access beta; t
 - `dist/` holds `gzip -n` binaries checked against `dist/SHA256SUMS` before every run; container connections not
   attributable to the job are listed apart.
 
-[Unreleased]: https://github.com/openwaf-dev/egress-action/compare/v0.3.2...HEAD
+[Unreleased]: https://github.com/openwaf-dev/egress-action/compare/v0.3.3...HEAD
+[0.3.3]: https://github.com/openwaf-dev/egress-action/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/openwaf-dev/egress-action/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/openwaf-dev/egress-action/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/openwaf-dev/egress-action/compare/v0.2.3...v0.3.0

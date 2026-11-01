@@ -22,13 +22,13 @@ Product documentation: [developers.openwaf.dev/egress/ci/quickstart/](https://de
    ```yaml
    steps:
      - uses: actions/checkout@v5
-     - uses: openwaf-dev/egress-action@v0.3.2
+     - uses: openwaf-dev/egress-action@v0.3.3
      - run: make test
    ```
 
    For production, pin the full commit SHA of the release instead of the tag (a tag can be moved; a SHA cannot),
    with the version as a comment so Dependabot can update it:
-   `uses: openwaf-dev/egress-action@<40-character SHA of v0.3.2> # v0.3.2`.
+   `uses: openwaf-dev/egress-action@<40-character SHA of v0.3.3> # v0.3.3`.
 
 2. Commit `.github/egress.yml`:
 
@@ -128,7 +128,9 @@ goes on. See [the documentation](https://developers.openwaf.dev/egress/ci/send-e
 
 `scripts/build-dist.sh` builds `dist/` reproducibly (Go version from `go.mod`; binaries stored as `gzip -n`, digests
 of the uncompressed binaries in `dist/SHA256SUMS`, checked before every run); CI checks that `dist/` matches the
-source and runs the containment probes (`tests/probes.sh`) on GitHub-hosted runners in audit and in enforce.
+source and runs the containment probes (`tests/probes.sh`) on GitHub-hosted runners in audit and in enforce, and the
+image pulls (`tests/pulls.sh`): audit with the `github-actions` preset alone, then enforce with the allowlist audit
+suggested.
 
 ## Security
 

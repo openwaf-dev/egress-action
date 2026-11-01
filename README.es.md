@@ -23,13 +23,13 @@ Documentación del producto: [developers.openwaf.dev/es/egress/ci/quickstart/](h
    ```yaml
    steps:
      - uses: actions/checkout@v5
-     - uses: openwaf-dev/egress-action@v0.3.2
+     - uses: openwaf-dev/egress-action@v0.3.3
      - run: make test
    ```
 
    En producción, fija el SHA completo del commit de la versión en vez de la etiqueta (una etiqueta se puede mover;
    un SHA, no), con la versión como comentario para que Dependabot pueda actualizarlo:
-   `uses: openwaf-dev/egress-action@<SHA de 40 caracteres de v0.3.2> # v0.3.2`.
+   `uses: openwaf-dev/egress-action@<SHA de 40 caracteres de v0.3.3> # v0.3.3`.
 
 2. Sube `.github/egress.yml`:
 
@@ -88,11 +88,11 @@ Una clave desconocida es un error: una errata hace fallar el paso en vez de no p
 |---|---|
 | Proxy | `HTTPS_PROXY`/`HTTP_PROXY` para los pasos siguientes. Los túneles `CONNECT` se comprueban por nombre y por el SNI de TLS (un SNI fuera de la política se rechaza); no se descifran salvo que el host esté en `inspect`. Se rechazan los destinos de loopback, link-local (metadatos de la nube) y multicast. |
 | Bloqueo | Una tabla nftables que solo afecta a los sockets del usuario del job: su DNS va al forwarder y cualquier otra conexión TCP a un proxy transparente (el propio runner, herramientas que ignoran las variables de proxy). El resto de flujos (UDP, ICMP, IPv6) fuera de la política se rechaza en enforce. |
-| Proxy transparente | Pone nombre a cada conexión con su SNI de TLS o su Host de HTTP, comprueba ese nombre contra la política y que la dirección a la que se envió es una de las que resuelve ese nombre (un SNI permitido enviado a otra dirección es domain fronting y se rechaza). Una conexión sin nombre solo pasa a una dirección que resolvió un nombre permitido. |
+| Proxy transparente | Pone nombre a cada conexión con su SNI de TLS o su Host de HTTP, comprueba ese nombre contra la política y que la dirección a la que se envió es una de las que resuelve ese nombre o, en TLS, un servidor con un certificado válido para ese nombre (registries y CDN como `ghcr.io` responden a cada consulta con otra de sus direcciones). Un SNI permitido enviado a un servidor que no es ese nombre es domain fronting y se rechaza. Una conexión sin nombre solo pasa a una dirección que resolvió un nombre permitido. |
 | DNS | Cada nombre se registra con quién lo pidió; los nombres fuera de la política reciben NXDOMAIN en enforce; las etiquetas largas de alta entropía (datos codificados en nombres) se marcan. |
-| Docker | `DOCKER_HOST` apunta a un socket que sirve el sidecar. Las redes del job entran en el bloqueo por subred al crearse (un contenedor que pide el bridge por defecto recibe la red propia del job), así que un contenedor está cubierto desde su primer paquete: su DNS y su TCP pasan por el mismo forwarder y el mismo proxy transparente, atribuidos por contenedor, y el resto se rechaza en enforce. Contenedores, redes y volúmenes llevan una etiqueta. Los pulls de imágenes se comprueban por registry antes de que el daemon descargue nada. `docker build` usa un contenedor builder del job (`BUILDX_BUILDER`, carga las imágenes en el daemon), así que los pasos del build también son del job; su caché de BuildKit se conserva para el siguiente job del mismo usuario del runner, hasta 4 GB. |
+| Docker | `DOCKER_HOST` apunta a un socket que sirve el sidecar. Las redes del job entran en el bloqueo por subred al crearse (un contenedor que pide el bridge por defecto recibe la red propia del job), así que un contenedor está cubierto desde su primer paquete: su DNS y su TCP pasan por el mismo forwarder y el mismo proxy transparente, atribuidos por contenedor, y el resto se rechaza en enforce. Contenedores, redes y volúmenes llevan una etiqueta. Los pulls de imágenes se comprueban por registry antes de que el daemon descargue nada. Mientras el job hace pull, push, build o login por su socket, las conexiones propias del daemon (registry, servicio de tokens, CDN de las capas) pasan por el proxy transparente y se registran con su nombre, nunca se rechazan: el daemon sirve a todo el runner. `docker build` usa un contenedor builder del job (`BUILDX_BUILDER`, carga las imágenes en el daemon), así que los pasos del build también son del job; su caché de BuildKit se conserva para el siguiente job del mismo usuario del runner, hasta 4 GB. |
 | DLP | Se revisan la URL, las cabeceras y los cuerpos de texto de hasta 4 MiB de HTTP en claro y de HTTPS inspeccionado: claves privadas, claves de acceso de AWS, claves `sk-`, tokens de GitHub (salvo hacia GitHub) y tarjetas de pago (Luhn). En enforce la petición se rechaza. |
-| Informe | El resumen del job: destinos con puertos, vía (proxy, direct, container, udp), bytes, contenedores, pulls de imágenes, nombres fuera de la política y detecciones. `report.json` en el log del paso posterior. |
+| Informe | El resumen del job: destinos con puertos, vía (proxy, direct, container, docker, udp), bytes, contenedores, pulls de imágenes, nombres fuera de la política y detecciones. Los registries de los pulls del job y los hosts a los que fue el daemon para ellos entran en la allowlist sugerida, así que el job sigue haciendo pulls en enforce. `report.json` en el log del paso posterior. |
 
 ## Enviar los eventos a OpenWAF
 
@@ -113,8 +113,11 @@ job sigue. Ver [la documentación](https://developers.openwaf.dev/es/egress/ci/s
 - Docker usado sin `DOCKER_HOST` (una herramienta que abre `/var/run/docker.sock` por su cuenta) no se atribuye; con
   `lock-all` su tráfico fuera de la política se rechaza igualmente y, si no, aparece como ajeno al job. Los
   contenedores con `--network host` quedan fuera del bloqueo salvo que se ejecuten con el usuario del job.
-- Los pulls de imágenes los hace el daemon: se comprueba el registry, las conexiones propias del daemon no pasan por
-  el proxy.
+- Las conexiones del daemon se registran, no se retienen: en enforce un pull se rechaza por registry, y los hosts a los
+  que va el daemon para un registry permitido no se comprueban. Solo se registran con cgroup v2 y el daemon en su
+  unidad de systemd (`docker.service`, `containerd.service`), y se atribuyen por tiempo: en un runner que ejecuta
+  varios jobs a la vez, también aparece un pull de otro job en el mismo momento. Las imágenes de `services:` y
+  `container:` las descarga el runner antes del primer paso, fuera de la acción.
 - Sin `inspect`, los cuerpos de las peticiones HTTPS no se revisan: los proxies ven el destino, no el contenido.
   Inspeccionar exige que el job confíe en una CA creada para la ejecución (exportada como `NODE_EXTRA_CA_CERTS`,
   `SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE`, `GIT_SSL_CAINFO`); las herramientas con su propio almacén
@@ -128,7 +131,8 @@ job sigue. Ver [la documentación](https://developers.openwaf.dev/es/egress/ci/s
 `scripts/build-dist.sh` genera `dist/` de forma reproducible (versión de Go de `go.mod`; binarios guardados con
 `gzip -n` y los digests de los binarios sin comprimir en `dist/SHA256SUMS`, que se comprueban antes de cada
 ejecución); la CI comprueba que `dist/` coincide con el código y ejecuta las sondas de contención (`tests/probes.sh`)
-en runners de GitHub en audit y en enforce.
+en runners de GitHub en audit y en enforce, y los pulls de imágenes (`tests/pulls.sh`): audit con el preset
+`github-actions` solo y después enforce con la allowlist que sugirió audit.
 
 ## Seguridad
 
